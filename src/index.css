@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* iOS Safari fixes */
+@layer base {
+  html {
+    height: 100%;
+    overflow: hidden;
+  }
+  
+  body {
+    height: 100%;
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  #root {
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+  }
+}
+
+/* Custom scrollable container */
+@layer components {
+  .scrollable-content {
+    height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  .safe-area-padding {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  
+  .bottom-nav-safe {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+  }
+  
+  .content-safe-bottom {
+    padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Fix for iOS input zoom */
+@layer utilities {
+  .no-zoom {
+    font-size: 16px;
+  }
+}
+
+/* Prevent bounce scrolling on iOS */
+.prevent-bounce {
+  overscroll-behavior: none;
+}
