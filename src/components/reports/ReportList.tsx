@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Filter, Calendar, FileText } from 'lucide-react';
+import { Search, Filter, Calendar, FileText, Upload } from 'lucide-react';
 import { Report } from '../../types';
 import { ReportCard } from './ReportCard';
 
@@ -7,9 +7,10 @@ interface ReportListProps {
   reports: Report[];
   onViewReport: (report: Report) => void;
   onDeleteReport: (reportId: string) => void;
+  onNavigateToUpload?: () => void;
 }
 
-export function ReportList({ reports, onViewReport, onDeleteReport }: ReportListProps) {
+export function ReportList({ reports, onViewReport, onDeleteReport, onNavigateToUpload }: ReportListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'date' | 'type'>('date');
@@ -108,10 +109,13 @@ export function ReportList({ reports, onViewReport, onDeleteReport }: ReportList
             </div>
             <h3 className="text-xl font-bold text-gray-600 mb-3">暂无报告</h3>
             <p className="text-gray-500 mb-6 max-w-xs mx-auto">还没有上传任何医疗报告，点击下方按钮开始添加</p>
-            <div className="bg-gradient-to-r from-pink-500 to-purple-600 text-white px-6 py-3 rounded-2xl font-semibold inline-flex items-center space-x-2 shadow-lg">
+            <button
+              onClick={onNavigateToUpload}
+              className="bg-gradient-to-r from-pink-500 to-purple-600 text-white px-6 py-3 rounded-2xl font-semibold inline-flex items-center space-x-2 shadow-lg hover:from-pink-600 hover:to-purple-700 transition-all duration-200 hover:shadow-xl transform hover:scale-105"
+            >
               <Upload size={20} />
               <span>上传第一份报告</span>
-            </div>
+            </button>
           </div>
         )}
       </div>

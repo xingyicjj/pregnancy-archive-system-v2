@@ -2,14 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Camera, Upload, FileImage, X, CheckCircle, AlertCircle, TrendingUp, Activity, Heart, Droplets, Brain, Loader } from 'lucide-react';
 import { Report, HealthMetric } from '../../types';
 import { generateReportTitle, simulateOCRExtraction } from '../../utils/fileUtils';
+import { getAuthHeaders, checkEnvConfigInDev } from '../utils/envUtils';
 
 interface UploadInterfaceProps {
   onUploadComplete: (report: Report) => void;
-  onComprehensiveAnalysisComplete?: (analysis: string) => void;
   user: any;
   reports: any[];
   healthMetrics: HealthMetric[];
-  comprehensiveAnalysis?: string | null;
 }
 
 interface UploadFile {
@@ -21,19 +20,13 @@ interface UploadFile {
   progress: number;
 }
 
-export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisComplete, user, reports, comprehensiveAnalysis: externalComprehensiveAnalysis }: UploadInterfaceProps) {
+export function UploadInterface({ onUploadComplete, user, reports, healthMetrics }: UploadInterfaceProps) {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const [currentAnalysisReport, setCurrentAnalysisReport] = useState<Report | null>(null);
-  const [comprehensiveAnalysis, setComprehensiveAnalysis] = useState<string | null>(externalComprehensiveAnalysis || null);
+  const [comprehensiveAnalysis, setComprehensiveAnalysis] = useState<string | null>(null);
   const [isComprehensiveAnalyzing, setIsComprehensiveAnalyzing] = useState(false);
-  const [showComprehensiveModal, setShowComprehensiveModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-
-  // 同步外部传入的综合分析数据
-  useEffect(() => {
-    setComprehensiveAnalysis(externalComprehensiveAnalysis || null);
-  }, [externalComprehensiveAnalysis]);
 
   const handleFileSelect = (files: FileList | null) => {
     if (!files) return;
@@ -100,10 +93,7 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
       console.log('豆包API请求体:', requestBody);
       const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_DOUBAO_API_KEY}`,
-        },
+        headers: getAuthHeaders('doubao'),
         body: JSON.stringify(requestBody)
       });
       // 这行代码的作用是：等待豆包API的响应，并将响应内容解析为JSON对象，赋值给data变量，供后续提取OCR识别内容使用。
@@ -131,10 +121,7 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
         const prompt = `请根据以下内容，完成两项任务：\n1. 生成专业医学建议，内容简明、分点输出。\n2. 生成一份AI报告摘要，摘要内容必须包含：报告时间（时间精确到小时和分钟，根据报告内容提取，没有则填“缺省”）、类型（用AI从报告内容中总结提取具体检查类型，10个字以内，如“"血常规检查"、"B超检查"、"糖耐量测试"、"尿常规检查"等”）、关键异常指标（如“血红蛋白含量112g/L偏高”）、报告主要内容（500字以内，不显示字数）。\n\n格式要求：\n【AI分析建议】\n（分点输出）\n【AI报告摘要】\n报告时间：xxxx\n类型：xxxx\n关键异常指标：xxxx\n主要内容：xxxx\n\n以下是用户信息和报告内容：\n用户档案信息：\n${JSON.stringify(user, null, 2)}\n历史报告摘要：\n${historySummaries}\n本次报告内容：\n${reportContent}\n注意：不进行核实报告姓名与档案姓名不符的情况`;
         const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${import.meta.env.VITE_DEEPSEEK_API_KEY}`,
-          },
+          headers: getAuthHeaders('deepseek'),
           body: JSON.stringify({
             model: 'deepseek-chat',
             messages: [
@@ -230,6 +217,7 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
 
     try {
       // 准备分析数据
+      const availableReportTypes = [...new Set(reports.map(r => r.type))];
       const reportTypesInfo = reports.map(r => `${r.type}: ${r.title}`).join(', ');
 
       // 构建综合分析的prompt
@@ -287,10 +275,7 @@ ${reportTypesInfo || '无报告'}
       // 调用DeepSeek API进行综合分析
       const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_DEEPSEEK_API_KEY}`,
-        },
+        headers: getAuthHeaders('deepseek'),
         body: JSON.stringify({
           model: 'deepseek-chat',
           messages: [
@@ -307,10 +292,6 @@ ${reportTypesInfo || '无报告'}
       const analysisResult = data.choices?.[0]?.message?.content || '分析生成失败，请稍后重试';
 
       setComprehensiveAnalysis(analysisResult);
-      // 调用回调函数，将分析结果传递给App组件进行存储
-      if (onComprehensiveAnalysisComplete) {
-        onComprehensiveAnalysisComplete(analysisResult);
-      }
     } catch (error) {
       console.error('综合分析失败:', error);
       setComprehensiveAnalysis('综合分析失败，请检查网络连接后重试');
@@ -449,30 +430,30 @@ ${reportTypesInfo || '无报告'}
             </div>
           </div>
         )}
-        {/* Upload Tips with compact design */}
-        <div className="bg-white/70 backdrop-blur-sm rounded-xl p-4 border border-gray-100 shadow-sm mb-6">
-          <div className="flex items-center mb-3">
-            <div className="w-6 h-6 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center mr-2">
-              <TrendingUp size={12} className="text-white" />
+        {/* Upload Tips with enhanced design */}
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-100 shadow-lg mb-8">
+          <div className="flex items-center mb-4">
+            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center mr-3">
+              <TrendingUp size={20} className="text-white" />
             </div>
-            <h4 className="text-sm font-semibold text-gray-700">上传小贴士</h4>
+            <h4 className="text-lg font-bold text-blue-800">上传小贴士</h4>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="flex items-center space-x-2 text-xs text-gray-600">
-              <div className="w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
-              <span>确保图片清晰</span>
+          <div className="grid grid-cols-1 gap-3">
+            <div className="flex items-center space-x-3 p-3 bg-white/60 rounded-xl">
+              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              <span className="text-sm text-blue-700 font-medium">确保图片清晰，文字可读</span>
             </div>
-            <div className="flex items-center space-x-2 text-xs text-gray-600">
-              <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full"></div>
-              <span>支持常见格式</span>
+            <div className="flex items-center space-x-3 p-3 bg-white/60 rounded-xl">
+              <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
+              <span className="text-sm text-blue-700 font-medium">支持 JPG、PNG 等常见格式</span>
             </div>
-            <div className="flex items-center space-x-2 text-xs text-gray-600">
-              <div className="w-1.5 h-1.5 bg-purple-500 rounded-full"></div>
-              <span>可批量上传</span>
+            <div className="flex items-center space-x-3 p-3 bg-white/60 rounded-xl">
+              <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+              <span className="text-sm text-blue-700 font-medium">可批量上传多张报告</span>
             </div>
-            <div className="flex items-center space-x-2 text-xs text-gray-600">
-              <div className="w-1.5 h-1.5 bg-pink-500 rounded-full"></div>
-              <span>AI自动分析</span>
+            <div className="flex items-center space-x-3 p-3 bg-white/60 rounded-xl">
+              <div className="w-2 h-2 bg-pink-500 rounded-full"></div>
+              <span className="text-sm text-blue-700 font-medium">AI 会自动识别并分析报告内容</span>
             </div>
           </div>
         </div>
@@ -531,76 +512,111 @@ ${reportTypesInfo || '无报告'}
           </div>
         )}
 
+        {/* Comprehensive Analysis Results with enhanced design */}
+        {comprehensiveAnalysis && (
+          <div className="mb-8 bg-white/90 backdrop-blur-sm rounded-3xl border border-white/50 overflow-hidden shadow-2xl">
+            <div className="bg-gradient-to-r from-purple-500 via-indigo-600 to-blue-600 p-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center mr-4">
+                    <Brain size={24} className="text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white">AI综合健康分析报告</h3>
+                    <p className="text-purple-100 text-sm">基于 {reports.length} 份报告的专业分析</p>
+                  </div>
+                </div>
+                <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+              </div>
+            </div>
+            <div className="p-6 max-h-96 overflow-y-auto">
+              <div className="prose prose-sm max-w-none">
+                <div className="text-gray-700 whitespace-pre-line leading-relaxed text-sm">
+                  {comprehensiveAnalysis}
+                </div>
+              </div>
+              <div className="pt-6 border-t border-gray-200 mt-6">
+                <button
+                  onClick={() => setComprehensiveAnalysis(null)}
+                  className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-4 rounded-2xl font-semibold hover:shadow-lg transition-all duration-300 hover:scale-105 flex items-center justify-center space-x-2"
+                >
+                  <X size={20} />
+                  <span>关闭分析报告</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-
-        {/* AI Comprehensive Analysis Card */}
+        {/* Recent Analysis Results with enhanced design */}
         {reports.length > 0 && (
           <div className="mb-8">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center">
-                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center mr-3">
-                  <Brain size={16} className="text-white" />
-                </div>
-                <h3 className="text-xl font-bold text-gray-800">AI综合健康分析</h3>
+            <div className="flex items-center mb-6">
+              <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center mr-3">
+                <Activity size={16} className="text-white" />
               </div>
-
+              <h3 className="text-xl font-bold text-gray-800">最近分析结果</h3>
             </div>
-
             <div className="space-y-4">
-              {comprehensiveAnalysis ? (
-                <div
-                  className="w-full bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-white/50 shadow-lg cursor-pointer hover:shadow-xl transition-all duration-300 hover:scale-[1.02]"
-                  onClick={() => setShowComprehensiveModal(true)}
-                >
+              {reports.slice(0, 3).map((report) => (
+                <div key={report.id} className="bg-white/80 backdrop-blur-sm rounded-2xl p-5 border border-white/50 shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-[1.02]">
                   <div className="flex items-start space-x-4">
-                    <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center shadow-lg">
-                      <Brain size={24} className="text-white" />
+                    <div className="relative">
+                      <img src={report.imageUrl} alt={report.title} className="w-20 h-20 rounded-xl object-cover border-2 border-white shadow-md" />
+                      <div className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-green-500 to-emerald-600 rounded-full flex items-center justify-center">
+                        <CheckCircle size={12} className="text-white" />
+                      </div>
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-bold text-gray-800 text-lg">综合健康分析报告</h4>
-                        <div className="bg-green-100 px-3 py-1 rounded-full flex items-center space-x-1">
-                          <CheckCircle size={12} className="text-green-600" />
-                          <span className="text-xs font-medium text-green-600">已完成</span>
+                        <h4 className="font-bold text-gray-800 text-lg">{report.title}</h4>
+                        <div className="bg-gray-100 px-3 py-1 rounded-full">
+                          <span className="text-xs font-medium text-gray-600">{new Date(report.date).toLocaleDateString('zh-CN')}</span>
                         </div>
                       </div>
-                      <p className="text-sm text-gray-600 leading-relaxed mb-3">
-                        {comprehensiveAnalysis.length > 100 ? comprehensiveAnalysis.substring(0, 100) + '...' : comprehensiveAnalysis}
-                      </p>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-4 text-xs text-gray-500">
-                          <div className="flex items-center space-x-1">
-                            <TrendingUp size={12} />
-                            <span>基于 {reports.length} 份报告</span>
-                          </div>
-                          <div className="flex items-center space-x-1">
-                            <Activity size={12} />
-                            <span>最新分析</span>
+
+                      {/* Analysis Summary */}
+                      <div className="mb-4">
+                        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 border border-blue-100">
+                          <p className="text-sm text-blue-800 font-medium">{report.analysis.summary}</p>
+                        </div>
+                      </div>
+
+                      {/* Alerts */}
+                      {report.analysis.alerts.length > 0 && (
+                        <div className="mb-4">
+                          <div className="space-y-2">
+                            {report.analysis.alerts.map((alert: any, index: number) => (
+                              <div key={index} className={`flex items-center space-x-3 px-3 py-2 rounded-xl ${alert.level === 'high' ? 'bg-red-50 border border-red-200' : alert.level === 'medium' ? 'bg-yellow-50 border border-yellow-200' : 'bg-blue-50 border border-blue-200'}`}>
+                                <div className={`w-3 h-3 rounded-full ${alert.level === 'high' ? 'bg-red-500' : alert.level === 'medium' ? 'bg-yellow-500' : 'bg-blue-500'}`} />
+                                <span className={`text-sm font-medium ${alert.level === 'high' ? 'text-red-700' : alert.level === 'medium' ? 'text-yellow-700' : 'text-blue-700'}`}>{alert.message}</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
-                        <div className="text-xs text-purple-600 font-medium">点击查看详情 →</div>
-                      </div>
+                      )}
+
+                      {/* Recommendations */}
+                      {report.analysis.recommendations.length > 0 && (
+                        <div>
+                          <h5 className="text-sm font-bold text-gray-700 mb-2 flex items-center">
+                            <Heart size={14} className="text-pink-500 mr-1" />
+                            健康建议
+                          </h5>
+                          <div className="space-y-2">
+                            {report.analysis.recommendations.slice(0, 2).map((rec: any, index: number) => (
+                              <div key={index} className="flex items-start space-x-2 bg-green-50 rounded-lg p-2 border border-green-100">
+                                <div className="w-2 h-2 bg-green-500 rounded-full mt-2"></div>
+                                <span className="text-sm text-green-700 font-medium">{rec}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-white/50 shadow-lg">
-                  <div className="text-center">
-                    <div className="w-16 h-16 bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                      <Brain size={24} className="text-gray-400" />
-                    </div>
-                    <h4 className="font-bold text-gray-800 text-lg mb-2">暂无综合分析</h4>
-                    <p className="text-sm text-gray-600 mb-4">
-                      上传报告后，可在分析页面进行AI综合健康分析
-                    </p>
-                    <div className="bg-gray-50 rounded-xl p-3">
-                      <p className="text-xs text-gray-500">
-                        💡 综合分析将基于您的档案信息和所有报告，提供个性化的健康评估和建议
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
+              ))}
             </div>
           </div>
         )}
@@ -679,45 +695,6 @@ ${reportTypesInfo || '无报告'}
             </div>
           </div>
         )}
-
-        {/* Comprehensive Analysis Modal */}
-        {showComprehensiveModal && comprehensiveAnalysis && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl">
-              {/* Header */}
-              <div className="bg-gradient-to-r from-purple-500 via-indigo-600 to-blue-600 text-white p-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                      <Brain size={24} className="text-white" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-bold">AI综合健康分析报告</h2>
-                      <p className="text-purple-100 text-sm">基于 {reports.length} 份报告的专业分析</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setShowComprehensiveModal(false)}
-                    className="text-white hover:text-purple-200 transition-colors"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Content */}
-              <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
-                <div className="prose prose-sm max-w-none">
-                  <div className="text-gray-700 whitespace-pre-line leading-relaxed">
-                    {comprehensiveAnalysis}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-
       </div>
     </div>
   );

@@ -2,6 +2,25 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Camera, Upload, FileImage, X, CheckCircle, AlertCircle, TrendingUp, Activity, Heart, Droplets, Brain, Loader } from 'lucide-react';
 import { Report, HealthMetric } from '../../types';
 import { generateReportTitle, simulateOCRExtraction } from '../../utils/fileUtils';
+import {
+  ProgressTracker,
+  PROCESSING_STAGES,
+  COMPREHENSIVE_ANALYSIS_STAGES,
+  ProcessingStage,
+  StatusMessage,
+  STATUS_MESSAGES
+} from '../../utils/progressTracker';
+import {
+  fetchWithRetry,
+  convertImageToBase64,
+  classifyError,
+  measurePerformance,
+  simulateProgress,
+  logAPICall,
+  API_CONFIGS
+} from '../../utils/apiUtils';
+import { getAuthHeaders, checkEnvConfigInDev } from '../../utils/envUtils';
+import { ProcessingProgress, SimpleProgress, ErrorDisplay } from './ProcessingProgress';
 
 interface UploadInterfaceProps {
   onUploadComplete: (report: Report) => void;
@@ -21,6 +40,15 @@ interface UploadFile {
   progress: number;
 }
 
+// 创建全新进度状态的工具函数
+const createFreshProgressState = () => ({
+  visible: false,
+  stages: [],
+  currentStage: null,
+  totalProgress: 0,
+  statusMessage: null
+});
+
 export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisComplete, user, reports, comprehensiveAnalysis: externalComprehensiveAnalysis }: UploadInterfaceProps) {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const [currentAnalysisReport, setCurrentAnalysisReport] = useState<Report | null>(null);
@@ -29,6 +57,50 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
   const [showComprehensiveModal, setShowComprehensiveModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  // 开发环境下检查环境变量配置
+  useEffect(() => {
+    checkEnvConfigInDev();
+  }, []);
+
+  // 新增状态管理
+  const [processingProgress, setProcessingProgress] = useState<{
+    visible: boolean;
+    stages: ProcessingStage[];
+    currentStage: ProcessingStage | null;
+    totalProgress: number;
+    statusMessage: StatusMessage | null;
+  }>({
+    visible: false,
+    stages: [],
+    currentStage: null,
+    totalProgress: 0,
+    statusMessage: null
+  });
+
+  const [comprehensiveProgress, setComprehensiveProgress] = useState<{
+    visible: boolean;
+    stages: ProcessingStage[];
+    currentStage: ProcessingStage | null;
+    totalProgress: number;
+    statusMessage: StatusMessage | null;
+  }>({
+    visible: false,
+    stages: [],
+    currentStage: null,
+    totalProgress: 0,
+    statusMessage: null
+  });
+
+  const [error, setError] = useState<{
+    visible: boolean;
+    info: any;
+    retryAction?: () => void;
+  }>({
+    visible: false,
+    info: null,
+    retryAction: undefined
+  });
 
   // 同步外部传入的综合分析数据
   useEffect(() => {
@@ -61,30 +133,60 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
   };
 
   const processFile = async (uploadFile: UploadFile) => {
+    // 首先重置进度状态，确保每次都是全新开始
+    setProcessingProgress(createFreshProgressState());
+
+    // 创建全新的进度追踪器
+    const progressTracker = new ProgressTracker(
+      PROCESSING_STAGES,
+      (totalProgress, currentStage, stages) => {
+        setProcessingProgress({
+          visible: true,
+          stages,
+          currentStage,
+          totalProgress,
+          statusMessage: null
+        });
+      }
+    );
+
+    // 短暂延迟后显示进度界面，确保状态完全重置
+    setTimeout(() => {
+      setProcessingProgress({
+        visible: true,
+        stages: [...PROCESSING_STAGES],
+        currentStage: PROCESSING_STAGES[0],
+        totalProgress: 0,
+        statusMessage: STATUS_MESSAGES.UPLOAD_START
+      });
+    }, 100);
+
     setUploadFiles(prev =>
       prev.map(f => f.id === uploadFile.id ? { ...f, status: 'processing', progress: 0 } : f)
     );
 
-    // 模拟进度条
-    for (let progress = 0; progress <= 100; progress += 10) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-      setUploadFiles(prev =>
-        prev.map(f => f.id === uploadFile.id ? { ...f, progress } : f)
-      );
-    }
-
     try {
-      // 1. 图片转base64
-      const fileToBase64 = (file: File) => {
-        return new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-      };
-      const base64Url = await fileToBase64(uploadFile.file);
+      // 阶段1: 文件准备
+      progressTracker.startStage('upload');
+      setProcessingProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.UPLOAD_START
+      }));
+
+      const { result: base64Url, duration: uploadDuration } = await measurePerformance(
+        () => convertImageToBase64(uploadFile.file),
+        '图片转base64'
+      );
+
+      progressTracker.completeStage('upload');
       console.log('base64长度:', base64Url.length);
+      // 阶段2: OCR识别
+      progressTracker.startStage('ocr');
+      setProcessingProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.OCR_START
+      }));
+
       const requestBody = {
         model: 'doubao-1.5-vision-lite-250315',
         messages: [
@@ -97,53 +199,87 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
           }
         ]
       };
+
       console.log('豆包API请求体:', requestBody);
-      const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer 0bbfff2e-435f-4149-b1bd-26cba3488dc9',
-        },
-        body: JSON.stringify(requestBody)
-      });
-      // 这行代码的作用是：等待豆包API的响应，并将响应内容解析为JSON对象，赋值给data变量，供后续提取OCR识别内容使用。
+
+      // 使用优化的fetch函数调用豆包API
+      const { result: response, duration: ocrDuration } = await measurePerformance(
+        () => fetchWithRetry(
+          'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+          {
+            method: 'POST',
+            headers: getAuthHeaders('doubao'),
+            body: JSON.stringify(requestBody)
+          },
+          API_CONFIGS.doubao,
+          (attempt, error) => {
+            console.log(`豆包API重试第${attempt}次:`, error.message);
+            progressTracker.updateStageProgress('ocr', Math.min(90, attempt * 30));
+          }
+        ),
+        '豆包OCR识别'
+      );
+
       const data = await response.json();
       console.log('豆包API响应:', data);
-      // 3. 解析豆包API返回内容
+      logAPICall('豆包OCR', ocrDuration, true);
+
+      // 解析豆包API返回内容
       let extractedData: Record<string, any> = {};
       let ocrContent = '';
       if (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
         const content = data.choices[0].message.content;
         ocrContent = Array.isArray(content) ? content.join('') : content;
-        extractedData.ocrContent = ocrContent; // 只存豆包API内容
-        console.log('豆包OCR内容:', ocrContent); // 调试用
+        extractedData.ocrContent = ocrContent;
+        console.log('豆包OCR内容:', ocrContent);
       }
 
-      // 4. 后续流程保持不变
-      // DeepSeek医学建议
+      progressTracker.completeStage('ocr');
+      setProcessingProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.OCR_SUCCESS
+      }));
+
+      // 阶段3: AI医学分析
+      progressTracker.startStage('analysis');
+      setProcessingProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.ANALYSIS_START
+      }));
+
       let aiAdvice = '';
       let aiSummary = '';
       try {
         const historySummaries = reports.map(r => r.extractedData?.summary).filter(Boolean).join('\n\n');
-        // 使用豆包API识别的原始内容作为DeepSeek分析的输入
         const reportContent = ocrContent || '无法识别报告内容';
-        // 新的 prompt，要求 deepseek 返回结构化内容
         const prompt = `请根据以下内容，完成两项任务：\n1. 生成专业医学建议，内容简明、分点输出。\n2. 生成一份AI报告摘要，摘要内容必须包含：报告时间（时间精确到小时和分钟，根据报告内容提取，没有则填“缺省”）、类型（用AI从报告内容中总结提取具体检查类型，10个字以内，如“"血常规检查"、"B超检查"、"糖耐量测试"、"尿常规检查"等”）、关键异常指标（如“血红蛋白含量112g/L偏高”）、报告主要内容（500字以内，不显示字数）。\n\n格式要求：\n【AI分析建议】\n（分点输出）\n【AI报告摘要】\n报告时间：xxxx\n类型：xxxx\n关键异常指标：xxxx\n主要内容：xxxx\n\n以下是用户信息和报告内容：\n用户档案信息：\n${JSON.stringify(user, null, 2)}\n历史报告摘要：\n${historySummaries}\n本次报告内容：\n${reportContent}\n注意：不进行核实报告姓名与档案姓名不符的情况`;
-        const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer sk-66336ae105fb497397c069a02bc392b1',
-          },
-          body: JSON.stringify({
-            model: 'deepseek-chat',
-            messages: [
-              { role: 'system', content: '你是专业的孕妇健康管理专家。请对报告内容进行专业的分析' },
-              { role: 'user', content: prompt }
-            ]
-          })
-        });
+        // 使用优化的fetch函数调用DeepSeek API
+        const { result: deepseekResponse, duration: analysisDuration } = await measurePerformance(
+          () => fetchWithRetry(
+            'https://api.deepseek.com/v1/chat/completions',
+            {
+              method: 'POST',
+              headers: getAuthHeaders('deepseek'),
+              body: JSON.stringify({
+                model: 'deepseek-chat',
+                messages: [
+                  { role: 'system', content: '你是专业的孕妇健康管理专家。请对报告内容进行专业的分析' },
+                  { role: 'user', content: prompt }
+                ]
+              })
+            },
+            API_CONFIGS.deepseek,
+            (attempt, error) => {
+              console.log(`DeepSeek API重试第${attempt}次:`, error.message);
+              progressTracker.updateStageProgress('analysis', Math.min(90, attempt * 30));
+            }
+          ),
+          'DeepSeek医学分析'
+        );
+
         const deepseekData = await deepseekResponse.json();
+        logAPICall('DeepSeek分析', analysisDuration, true);
+
         // 解析 deepseek 返回内容，分离 AI 建议和报告摘要
         const content = deepseekData.choices?.[0]?.message?.content || '';
         const adviceMatch = content.match(/【AI分析建议】([\s\S]*?)(?=【AI报告摘要】|$)/);
@@ -151,15 +287,29 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
         aiAdvice = adviceMatch ? adviceMatch[1].trim() : '';
         aiSummary = summaryMatch ? summaryMatch[1].trim() : '';
       } catch (e) {
+        console.error('DeepSeek分析失败:', e);
+        logAPICall('DeepSeek分析', 0, false, e as Error);
         aiAdvice = 'AI建议生成失败';
       }
+
+      progressTracker.completeStage('analysis');
+      setProcessingProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.ANALYSIS_SUCCESS
+      }));
+      // 阶段4: 生成报告
+      progressTracker.startStage('finalize');
+      setProcessingProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.COMPLETE
+      }));
+
       const analysis = generateAnalysis(extractedData, uploadFile.type);
       analysis.recommendations = aiAdvice.split(/\n|\r|\r\n/).filter(line => line.trim());
-      // deepseek 解析后，aiSummary 作为摘要单独存储
-      extractedData.summary = aiSummary; // 只存deepseek摘要
+      extractedData.summary = aiSummary;
 
       // 从 AI 报告摘要中提取"类型"字段作为报告类型
-      let extractedType = uploadFile.type; // 默认使用原始类型
+      let extractedType = uploadFile.type;
       const typeMatch = aiSummary.match(/类型[：:]\s*([^\n\r]+)/);
       if (typeMatch && typeMatch[1]) {
         extractedType = typeMatch[1].trim();
@@ -167,32 +317,65 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
 
       const report: Report = {
         id: Math.random().toString(36).substring(2, 11),
-        type: extractedType, // 使用从 AI 分析中提取的类型
+        type: extractedType,
         title: generateReportTitle(extractedType, new Date().toISOString()),
         date: new Date().toISOString().split('T')[0],
-        imageUrl: uploadFile.preview,
+        imageUrl: base64Url, // 使用Base64格式存储图片，确保可以导出
         extractedData,
         analysis,
         status: 'completed',
         uploadedAt: new Date().toISOString()
       };
 
+      progressTracker.completeStage('finalize');
+
       setUploadFiles(prev =>
         prev.map(f => f.id === uploadFile.id ? { ...f, status: 'completed' } : f)
       );
 
-      // Show analysis result directly on page
       setCurrentAnalysisReport(report);
       onUploadComplete(report);
 
+      // 显示完成状态一段时间后隐藏进度界面
       setTimeout(() => {
+        setProcessingProgress(prev => ({ ...prev, visible: false }));
         removeFile(uploadFile.id);
-      }, 2000);
+      }, 3000);
 
     } catch (error) {
+      console.error('文件处理失败:', error);
+
+      // 分类错误并显示用户友好的错误信息
+      const errorInfo = classifyError(error as Error);
+
+      // 标记当前阶段失败
+      const currentStage = progressTracker.stages?.find(s => s.status === 'processing');
+      if (currentStage) {
+        progressTracker.failStage(currentStage.id);
+      }
+
       setUploadFiles(prev =>
         prev.map(f => f.id === uploadFile.id ? { ...f, status: 'failed' } : f)
       );
+
+      // 显示错误信息
+      setError({
+        visible: true,
+        info: errorInfo,
+        retryAction: errorInfo.retryable ? () => {
+          setError({ visible: false, info: null });
+          processFile(uploadFile);
+        } : undefined
+      });
+
+      // 隐藏进度界面并完全重置状态
+      setProcessingProgress({
+        visible: false,
+        stages: [],
+        currentStage: null,
+        totalProgress: 0,
+        statusMessage: null
+      });
     }
   };
 
@@ -225,95 +408,230 @@ export function UploadInterface({ onUploadComplete, onComprehensiveAnalysisCompl
 
   // 综合分析功能
   const performComprehensiveAnalysis = async () => {
+    // 首先重置综合分析进度状态
+    setComprehensiveProgress(createFreshProgressState());
+
     setIsComprehensiveAnalyzing(true);
     setComprehensiveAnalysis(null);
 
+    // 创建全新的综合分析进度追踪器
+    const comprehensiveTracker = new ProgressTracker(
+      COMPREHENSIVE_ANALYSIS_STAGES,
+      (totalProgress, currentStage, stages) => {
+        setComprehensiveProgress({
+          visible: true,
+          stages,
+          currentStage,
+          totalProgress,
+          statusMessage: null
+        });
+      }
+    );
+
+    // 短暂延迟后显示综合分析进度界面，确保状态完全重置
+    setTimeout(() => {
+      setComprehensiveProgress({
+        visible: true,
+        stages: [...COMPREHENSIVE_ANALYSIS_STAGES],
+        currentStage: COMPREHENSIVE_ANALYSIS_STAGES[0],
+        totalProgress: 0,
+        statusMessage: STATUS_MESSAGES.COMPREHENSIVE_START
+      });
+    }, 100);
+
     try {
-      // 准备分析数据
+      // 阶段1: 数据准备
+      comprehensiveTracker.startStage('prepare');
       const reportTypesInfo = reports.map(r => `${r.type}: ${r.title}`).join(', ');
+      comprehensiveTracker.completeStage('prepare');
 
-      // 构建综合分析的prompt
+      // 阶段2: AI综合分析
+      comprehensiveTracker.startStage('analysis');
+
+      // 智能数据处理：根据报告数量调整处理策略
+      let reportsToAnalyze = reports;
+      let processingNote = '';
+
+      // 如果报告数量过多，优先分析最近的报告
+      if (reports.length > 8) {
+        reportsToAnalyze = reports
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          .slice(0, 8); // 只分析最近的8份报告
+        processingNote = `注：由于报告数量较多(${reports.length}份)，本次分析重点关注最近的${reportsToAnalyze.length}份报告。`;
+        console.log(`📋 报告数量优化: ${reports.length}份 → ${reportsToAnalyze.length}份（最新报告优先）`);
+      }
+
+      // 数据精简：只使用摘要和关键信息，避免传输完整OCR内容
+      const simplifiedReports = reportsToAnalyze.map((r, index) => {
+        // 根据报告数量动态调整内容长度
+        const maxContentLength = reportsToAnalyze.length > 5 ? 300 : 500;
+        const keyContent = r.extractedData?.ocrContent ?
+          r.extractedData.ocrContent.substring(0, maxContentLength) +
+          (r.extractedData.ocrContent.length > maxContentLength ? '...' : '') :
+          '无识别内容';
+
+        return `${index + 1}. ${r.title} (${r.date})
+   - 类型：${r.type}
+   - 关键信息：${keyContent}
+   - AI摘要：${r.extractedData?.summary || '无摘要'}
+   - 主要建议：${r.analysis?.recommendations?.slice(0, 2).join('；') || '无建议'}`;
+      }).join('\n');
+
+      // 精简的用户档案信息
+      const userProfile = {
+        name: user.name,
+        currentWeek: user.currentWeek,
+        dueDate: user.dueDate,
+        lastMenstrualPeriod: user.lastMenstrualPeriod,
+        medicalHistory: user.medicalHistory?.join(', ') || '无特殊病史'
+      };
+
+      // 构建优化后的prompt
       const comprehensivePrompt = `
-作为专业的孕期健康顾问，请对以下孕妇进行全面的综合健康分析：
+作为专业的孕期健康顾问，请基于以下信息进行综合健康分析：
 
-【用户档案信息】
-- 姓名：${user.name}
-- 当前孕周：${user.currentWeek}周
-- 预产期：${user.dueDate}
-- 末次月经：${user.lastMenstrualPeriod}
-- 病史：${user.medicalHistory?.join(', ') || '无特殊病史'}
+【用户档案】
+姓名：${userProfile.name} | 孕周：${userProfile.currentWeek}周 | 预产期：${userProfile.dueDate}
+末次月经：${userProfile.lastMenstrualPeriod} | 病史：${userProfile.medicalHistory}
 
-【现有报告数据】（共${reports.length}份报告）
-${reports.map((r, index) => `
-${index + 1}. ${r.title} (${r.date})
-   - 报告类型：${r.type}
-   - AI识别内容：${r.extractedData?.ocrContent || '无识别内容'}
-   - AI分析摘要：${r.extractedData?.summary || '无分析摘要'}
-   - 建议：${r.analysis?.recommendations?.join('；') || '无建议'}
-`).join('')}
+【报告汇总】（分析${reportsToAnalyze.length}份，共${reports.length}份）
+${simplifiedReports}
+${processingNote}
 
-【现有报告类型】
-${reportTypesInfo || '无报告'}
+【报告类型】${reportTypesInfo}
 
-请按以下格式提供综合分析（每个部分都要详细分析）：
+请按以下格式提供简洁而专业的综合分析：
 
-【📊 综合健康评估】
-基于现有${reports.length}份报告和用户档案，对整体健康状况进行评估
+【📊 健康状况评估】
+基于${reports.length}份报告，简要评估整体健康状况（200字内）
 
-【📈 孕期发展趋势】
-根据报告时间序列分析健康指标变化趋势和发展规律
+【⚠️ 重点关注事项】
+识别需要重点关注的指标和风险（3-5条要点）
 
-【⚠️ 风险识别与预警】
-识别潜在风险因素，包括异常指标和需要关注的问题
+【🔍 建议检查项目】
+基于孕周${userProfile.currentWeek}周，推荐优先检查项目（按优先级排序）
 
-【🔍 检查建议分析】
-- 基于当前孕周${user.currentWeek}周，分析现有报告的完整性
-- 根据标准产检流程，建议需要补充的检查项目
-- 检查优先级排序（高/中/低）
+【💡 健康管理建议】
+1. 生活方式要点（2-3条）
+2. 营养补充重点（2-3条）
+3. 日常监测要点（2-3条）
 
-【💡 个性化健康建议】
-1. 生活方式调整建议
-2. 营养补充具体建议
-3. 日常监测重点
-4. 心理健康关注
-
-【📋 下一步行动计划】
-具体的时间节点和检查安排，包括：
-- 近期（1-2周内）需要完成的检查
-- 中期（1个月内）的健康管理重点
-- 长期（到分娩前）的整体规划
+【📋 近期行动计划】
+未来2-4周内的具体行动安排（简明扼要）
 `;
 
-      // 调用DeepSeek API进行综合分析
-      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer sk-66336ae105fb497397c069a02bc392b1',
-        },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: [
-            {
-              role: 'system',
-              content: '你是专业的孕期健康顾问和医学分析专家，具有丰富的产科临床经验。请提供专业、详细、实用的综合健康分析。'
-            },
-            { role: 'user', content: comprehensivePrompt }
-          ]
-        })
-      });
+      // 数据量监控和优化提示
+      const promptLength = comprehensivePrompt.length;
+      const estimatedTokens = Math.ceil(promptLength / 4); // 粗略估算token数
+
+      console.log('📊 综合分析数据量统计:');
+      console.log(`- 报告数量: ${reports.length}份`);
+      console.log(`- Prompt长度: ${promptLength}字符`);
+      console.log(`- 预估Token数: ${estimatedTokens}`);
+      console.log(`- 预估处理时间: ${Math.ceil(estimatedTokens / 100)}秒`);
+
+      // 如果数据量过大，给出警告和预估时间
+      if (estimatedTokens > 6000) {
+        const estimatedTime = Math.ceil(estimatedTokens / 80); // 更保守的估算
+        console.warn('⚠️ 数据量较大，可能需要较长处理时间');
+        setComprehensiveProgress(prev => ({
+          ...prev,
+          statusMessage: {
+            type: 'warning',
+            title: '数据量较大',
+            description: `正在处理${reports.length}份报告，预计需要${estimatedTime}秒，请耐心等待...`,
+            timestamp: Date.now()
+          }
+        }));
+      }
+
+      // 使用优化的fetch函数调用DeepSeek API进行综合分析
+      const { result: response, duration: comprehensiveDuration } = await measurePerformance(
+        () => fetchWithRetry(
+          'https://api.deepseek.com/v1/chat/completions',
+          {
+            method: 'POST',
+            headers: getAuthHeaders('deepseek'),
+            body: JSON.stringify({
+              model: 'deepseek-chat',
+              messages: [
+                {
+                  role: 'system',
+                  content: '你是专业的孕期健康顾问和医学分析专家，具有丰富的产科临床经验。请提供专业、详细、实用的综合健康分析。'
+                },
+                { role: 'user', content: comprehensivePrompt }
+              ]
+            })
+          },
+          API_CONFIGS.deepseek,
+          (attempt, error) => {
+            console.log(`综合分析API重试第${attempt}次:`, error.message);
+            comprehensiveTracker.updateStageProgress('analysis', Math.min(90, attempt * 30));
+          }
+        ),
+        'DeepSeek综合分析'
+      );
 
       const data = await response.json();
+      logAPICall('DeepSeek综合分析', comprehensiveDuration, true);
+
       const analysisResult = data.choices?.[0]?.message?.content || '分析生成失败，请稍后重试';
 
+      comprehensiveTracker.completeStage('analysis');
+
+      // 阶段3: 生成报告
+      comprehensiveTracker.startStage('finalize');
+
       setComprehensiveAnalysis(analysisResult);
-      // 调用回调函数，将分析结果传递给App组件进行存储
       if (onComprehensiveAnalysisComplete) {
         onComprehensiveAnalysisComplete(analysisResult);
       }
+
+      comprehensiveTracker.completeStage('finalize');
+
+      // 显示完成状态
+      setComprehensiveProgress(prev => ({
+        ...prev,
+        statusMessage: STATUS_MESSAGES.COMPREHENSIVE_SUCCESS
+      }));
+
+      // 延迟隐藏进度界面
+      setTimeout(() => {
+        setComprehensiveProgress(prev => ({ ...prev, visible: false }));
+      }, 3000);
+
     } catch (error) {
       console.error('综合分析失败:', error);
+      logAPICall('DeepSeek综合分析', 0, false, error as Error);
+
+      const errorInfo = classifyError(error as Error);
+
+      // 标记当前阶段失败
+      const currentStage = comprehensiveTracker.stages?.find(s => s.status === 'processing');
+      if (currentStage) {
+        comprehensiveTracker.failStage(currentStage.id);
+      }
+
       setComprehensiveAnalysis('综合分析失败，请检查网络连接后重试');
+
+      // 显示错误信息
+      setError({
+        visible: true,
+        info: errorInfo,
+        retryAction: errorInfo.retryable ? () => {
+          setError({ visible: false, info: null });
+          performComprehensiveAnalysis();
+        } : undefined
+      });
+
+      // 隐藏进度界面并完全重置状态
+      setComprehensiveProgress({
+        visible: false,
+        stages: [],
+        currentStage: null,
+        totalProgress: 0,
+        statusMessage: null
+      });
     } finally {
       setIsComprehensiveAnalyzing(false);
     }
@@ -504,6 +822,11 @@ ${reportTypesInfo || '无报告'}
                       <div className="w-full bg-white/20 rounded-full h-2 mt-2">
                         <div className="bg-white h-2 rounded-full" style={{ width: `${Math.min(reports.length * 25, 100)}%` }}></div>
                       </div>
+                      {reports.length > 5 && (
+                        <div className="mt-3 text-xs text-purple-200 bg-white/5 rounded-lg p-2">
+                          💡 优化提示：报告较多时，系统会智能筛选最新的{Math.min(8, reports.length)}份进行深度分析，预计耗时{Math.ceil(reports.length / 2)}秒
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -514,10 +837,11 @@ ${reportTypesInfo || '无报告'}
                   className="w-full bg-white/20 hover:bg-white/30 disabled:bg-white/10 backdrop-blur-sm text-white py-4 px-6 rounded-2xl font-semibold transition-all duration-300 flex items-center justify-center space-x-3 hover:scale-105 disabled:hover:scale-100 shadow-lg"
                 >
                   {isComprehensiveAnalyzing ? (
-                    <>
-                      <Loader size={24} className="animate-spin" />
-                      <span className="text-lg">AI正在深度分析中...</span>
-                    </>
+                    <SimpleProgress
+                      progress={comprehensiveProgress.totalProgress}
+                      stage={comprehensiveProgress.currentStage?.name || '分析中'}
+                      className="text-white"
+                    />
                   ) : (
                     <>
                       <Brain size={24} />
@@ -717,6 +1041,32 @@ ${reportTypesInfo || '无报告'}
           </div>
         )}
 
+        {/* 进度显示组件 */}
+        <ProcessingProgress
+          stages={processingProgress.stages}
+          currentStage={processingProgress.currentStage!}
+          totalProgress={processingProgress.totalProgress}
+          statusMessage={processingProgress.statusMessage}
+          isVisible={processingProgress.visible}
+        />
+
+        {/* 综合分析进度显示组件 */}
+        <ProcessingProgress
+          stages={comprehensiveProgress.stages}
+          currentStage={comprehensiveProgress.currentStage!}
+          totalProgress={comprehensiveProgress.totalProgress}
+          statusMessage={comprehensiveProgress.statusMessage}
+          isVisible={comprehensiveProgress.visible}
+        />
+
+        {/* 错误显示组件 */}
+        {error.visible && (
+          <ErrorDisplay
+            error={error.info}
+            onRetry={error.retryAction}
+            onClose={() => setError({ visible: false, info: null })}
+          />
+        )}
 
       </div>
     </div>

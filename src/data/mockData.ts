@@ -4,6 +4,8 @@ export const mockUser: User = {
   id: '1',
   name: '张小美',
   phone: '138****8888',
+  email: 'demo@example.com', // 新增邮箱字段
+  password: '123456', // 演示密码
   avatar: 'https://images.pexels.com/photos/2169434/pexels-photo-2169434.jpeg?auto=compress&cs=tinysrgb&w=150',
   dueDate: '2024-08-15',
   lastMenstrualPeriod: '2023-11-15',

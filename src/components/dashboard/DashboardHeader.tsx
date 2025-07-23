@@ -11,6 +11,13 @@ export function DashboardHeader({ user }: DashboardHeaderProps) {
   const daysUntilDue = getDaysUntilDueDate(user.dueDate);
   const pregnancyWeeks = formatPregnancyWeeks(user.currentWeek);
 
+  // 调试信息
+  console.log('📊 Dashboard显示调试信息:');
+  console.log('用户当前孕周数值:', user.currentWeek);
+  console.log('格式化后的孕周显示:', pregnancyWeeks);
+  console.log('末次月经日期:', user.lastMenstrualPeriod);
+  console.log('预产期:', user.dueDate);
+
   return (
     <div className="relative overflow-hidden bg-gradient-to-br from-pink-500 via-purple-500 to-indigo-500 rounded-3xl p-8 text-white shadow-2xl">
       {/* Background decoration */}

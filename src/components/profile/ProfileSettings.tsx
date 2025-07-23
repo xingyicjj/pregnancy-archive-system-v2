@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
-import { Camera, Calendar, Phone, Shield, FileText, LogOut, ChevronRight } from 'lucide-react';
+import { Camera, Calendar, Phone, Shield, FileText, LogOut, ChevronRight, Mail, Calculator, Database } from 'lucide-react';
 import { User } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
+import { PregnancyCalculatorTest } from '../debug/PregnancyCalculatorTest';
+import { DataManager } from '../data/DataManager';
 
 interface ProfileSettingsProps {
   user: User;
@@ -8,24 +11,106 @@ interface ProfileSettingsProps {
 }
 
 export function ProfileSettings({ user, onUpdateUser }: ProfileSettingsProps) {
+  const { logout } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
+  const [showDataManager, setShowDataManager] = useState(false);
+  const [showCalculator, setShowCalculator] = useState(false);
   const [editForm, setEditForm] = useState({
     name: user.name,
+    email: user.email,
     phone: user.phone,
     dueDate: user.dueDate,
     lastMenstrualPeriod: user.lastMenstrualPeriod,
     medicalHistory: user.medicalHistory?.join(', ') || ''
   });
 
+  // 头像上传相关状态
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
+
+  // 头像上传处理函数
+  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // 检查文件类型
+    if (!file.type.startsWith('image/')) {
+      alert('请选择图片文件');
+      return;
+    }
+
+    // 检查文件大小 (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('图片大小不能超过5MB');
+      return;
+    }
+
+    setIsUploadingAvatar(true);
+
+    try {
+      // 创建文件预览URL
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const newAvatarUrl = e.target?.result as string;
+
+        // 更新用户头像
+        const updatedUser = {
+          ...user,
+          avatar: newAvatarUrl
+        };
+
+        onUpdateUser(updatedUser);
+        console.log('✅ 头像上传成功');
+      };
+
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('❌ 头像上传失败:', error);
+      alert('头像上传失败，请重试');
+    } finally {
+      setIsUploadingAvatar(false);
+      // 清空input值，允许重复选择同一文件
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
+    }
+  };
+
   const handleSave = () => {
+    // 根据末次月经日期重新计算孕周和预产期
+    const lmpDate = new Date(editForm.lastMenstrualPeriod);
+    const currentDate = new Date();
+    const diffTime = currentDate.getTime() - lmpDate.getTime();
+    const diffWeeks = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 7));
+    const currentWeek = Math.max(0, Math.min(42, diffWeeks)); // 限制在0-42周之间
+
+    // 根据末次月经日期计算预产期（280天后）
+    const calculatedDueDate = new Date(lmpDate.getTime() + 280 * 24 * 60 * 60 * 1000);
+    const dueDateString = calculatedDueDate.toISOString().split('T')[0];
+
+    // 调试信息
+    console.log('🔍 孕周和预产期计算调试信息:');
+    console.log('末次月经日期:', editForm.lastMenstrualPeriod);
+    console.log('当前日期:', currentDate.toISOString().split('T')[0]);
+    console.log('时间差(毫秒):', diffTime);
+    console.log('时间差(天):', Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+    console.log('计算出的孕周:', diffWeeks);
+    console.log('最终孕周:', currentWeek);
+    console.log('原预产期:', editForm.dueDate);
+    console.log('重新计算的预产期:', dueDateString);
+
     const updatedUser: User = {
       ...user,
       name: editForm.name,
+      email: editForm.email,
       phone: editForm.phone,
-      dueDate: editForm.dueDate,
+      dueDate: dueDateString, // 使用重新计算的预产期
       lastMenstrualPeriod: editForm.lastMenstrualPeriod,
+      currentWeek: currentWeek, // 重新计算的孕周
       medicalHistory: editForm.medicalHistory.split(',').map(item => item.trim()).filter(Boolean)
     };
+
+    console.log('📝 更新后的用户信息:', updatedUser);
     onUpdateUser(updatedUser);
     setIsEditing(false);
   };
@@ -49,10 +134,23 @@ export function ProfileSettings({ user, onUpdateUser }: ProfileSettingsProps) {
       action: () => {},
       color: 'text-purple-500'
     },
+
+    {
+      icon: Database,
+      label: '数据管理',
+      action: () => setShowDataManager(true),
+      color: 'text-indigo-500'
+    },
+    {
+      icon: Calculator,
+      label: '孕周计算器测试',
+      action: () => setShowCalculatorTest(true),
+      color: 'text-pink-500'
+    },
     {
       icon: LogOut,
       label: '退出登录',
-      action: () => {},
+      action: logout,
       color: 'text-red-500'
     }
   ];
@@ -80,12 +178,25 @@ export function ProfileSettings({ user, onUpdateUser }: ProfileSettingsProps) {
           <div className="relative flex items-center space-x-6">
             <div className="relative">
               <img
-                src={user.avatar}
+                src={user.avatar || 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=150&h=150&fit=crop&crop=face&auto=format&q=80'}
                 alt={user.name}
-                className="w-24 h-24 rounded-3xl border-4 border-white/30 shadow-xl"
+                className="w-24 h-24 rounded-3xl border-4 border-white/30 shadow-xl object-cover"
+                onError={(e) => {
+                  // 如果图片加载失败，使用默认女性头像
+                  (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=150&h=150&fit=crop&crop=face&auto=format&q=80';
+                }}
               />
-              <button className="absolute -bottom-2 -right-2 w-10 h-10 bg-white text-pink-500 rounded-2xl flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                <Camera size={18} />
+              <button
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={isUploadingAvatar}
+                className="absolute -bottom-2 -right-2 w-10 h-10 bg-white text-pink-500 rounded-2xl flex items-center justify-center shadow-lg hover:scale-110 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                title="更换头像"
+              >
+                {isUploadingAvatar ? (
+                  <div className="w-4 h-4 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <Camera size={18} />
+                )}
               </button>
               <div className="absolute -top-1 -left-1 w-6 h-6 bg-green-400 rounded-full border-2 border-white"></div>
             </div>
@@ -94,6 +205,9 @@ export function ProfileSettings({ user, onUpdateUser }: ProfileSettingsProps) {
               <div className="space-y-2">
                 <div className="bg-white/20 px-4 py-2 rounded-xl">
                   <p className="text-sm font-medium">孕期第 {user.currentWeek} 周</p>
+                </div>
+                <div className="bg-white/20 px-4 py-2 rounded-xl">
+                  <p className="text-sm font-medium">{user.email}</p>
                 </div>
                 <div className="bg-white/20 px-4 py-2 rounded-xl">
                   <p className="text-sm font-medium">{user.phone}</p>
@@ -123,6 +237,15 @@ export function ProfileSettings({ user, onUpdateUser }: ProfileSettingsProps) {
                 type="text"
                 value={editForm.name}
                 onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent no-zoom"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">邮箱地址</label>
+              <input
+                type="email"
+                value={editForm.email}
+                onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent no-zoom"
               />
             </div>
@@ -237,6 +360,41 @@ export function ProfileSettings({ user, onUpdateUser }: ProfileSettingsProps) {
           </div>
         </div>
       </div>
+
+
+
+      {showCalculator && (
+        <div className="fixed inset-0 z-50 bg-white">
+          <div className="h-full overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">孕周计算器测试</h2>
+              <button
+                onClick={() => setShowCalculator(false)}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-4">
+              <PregnancyCalculatorTest />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 隐藏的头像上传输入 */}
+      <input
+        ref={avatarInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleAvatarUpload}
+        className="hidden"
+      />
+
+      {/* 数据管理模态框 */}
+      {showDataManager && (
+        <DataManager onClose={() => setShowDataManager(false)} />
+      )}
     </div>
   );
 }

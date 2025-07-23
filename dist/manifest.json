@@ -1,0 +1,16 @@
+{
+  "name": "孕期档案管理系统",
+  "short_name": "孕期档案",
+  "description": "智能孕期健康管理平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#EC4899",
+  "icons": [
+    {
+      "src": "/baby.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
