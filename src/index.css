@@ -6,21 +6,28 @@
 @layer base {
   html {
     height: 100%;
-    overflow: hidden;
+    /* 允许认证页面滚动，但在主应用中通过 .prevent-scroll 类控制 */
   }
-  
+
   body {
     height: 100%;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+    /* 移除 overflow: hidden 和 position: fixed，允许认证页面正常滚动 */
+  }
+
+  #root {
+    min-height: 100vh;
+    position: relative;
+    /* 移除 overflow: hidden，允许内容滚动 */
+  }
+
+  /* 只在主应用中防止滚动 */
+  .prevent-scroll {
     overflow: hidden;
     position: fixed;
     width: 100%;
-    -webkit-overflow-scrolling: touch;
-  }
-  
-  #root {
-    height: 100vh;
-    overflow: hidden;
-    position: relative;
+    height: 100%;
   }
 }
 

@@ -325,8 +325,8 @@ export function PasswordResetPage({ onBackToLogin, onResetSuccess }: PasswordRes
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-pink-50 via-white to-purple-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen bg-gradient-to-br from-pink-50 via-white to-purple-50 py-8 px-4">
+      <div className="w-full max-w-md mx-auto">
         <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-xl p-8 border border-white/50">
           {/* 返回按钮 */}
           {currentStep !== 'success' && (

@@ -283,15 +283,15 @@ function MainApp() {
     );
   }
 
-  // 如果未认证，显示认证页面
+  // 如果未认证，显示认证页面（允许滚动）
   if (!isAuthenticated || !user) {
     return (
-      <>
+      <div className="min-h-screen">
         <AuthPage />
         <DataDebugPanel />
         <EmailTest />
         <EnvConfigChecker />
-      </>
+      </div>
     );
   }
 
@@ -389,7 +389,7 @@ function MainApp() {
   };
 
   return (
-    <div className="h-screen bg-gray-50 safe-area-padding prevent-bounce">
+    <div className="h-screen bg-gray-50 safe-area-padding prevent-bounce prevent-scroll">
       <div className="scrollable-content">
         {renderActiveTab()}
         {showDetailModal && selectedReport && (
